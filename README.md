@@ -225,6 +225,8 @@ Restart Codex after updating so it re-discovers the latest skills.
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the repository architecture, how to add or modify skills, and how to run the tests.
+
 Run the smoke tests:
 
 ```bash

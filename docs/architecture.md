@@ -1,0 +1,241 @@
+# HOTL Architecture
+
+This document describes the technical architecture of the HOTL plugin repository. For the user-facing overview, see the [main README](../README.md). For workflow and execution details, see [how-it-works.md](how-it-works.md).
+
+---
+
+## Overview
+
+HOTL is a **distribution system for AI behavior rules** — not an application. It has no runtime, no server, and no compiled artifacts. Its job is to get the right Markdown files into the right places so that each supported AI coding tool picks them up automatically.
+
+```
+Repository (source of truth)
+    │
+    ├─ skills/          → Claude Code (via plugin)
+    │                   → Codex (via ~/.agents/skills/hotl symlink)
+    │
+    ├─ cline/rules/     → Cline (via ~/Documents/Cline/Rules/)
+    │
+    ├─ commands/        → Claude Code slash commands
+    │
+    ├─ hooks/           → Claude Code SessionStart hook
+    │
+    └─ adapters/        → User projects (copied by hotl:setup-project)
+```
+
+---
+
+## Layer 1 — Skills
+
+Skills are the core of HOTL. Each skill is a Markdown file (`skills/<name>/SKILL.md`) that instructs an AI tool how to behave during a specific phase of development.
+
+### Skill File Structure
+
+```markdown
+---
+name: brainstorming
+description: "Short description used in skill discovery indexes"
+---
+
+# Title
+
+## Overview
+What this skill does and when to use it.
+
+## Process
+Step-by-step instructions the AI follows.
+
+## Contracts
+HOTL contract templates the AI fills in.
+```
+
+### Skill Discovery
+
+| Tool | Discovery Mechanism |
+|---|---|
+| Claude Code | Plugin registration in `.claude-plugin/plugin.json` → `"skills": "./skills/"` |
+| Codex | Symlink `~/.agents/skills/hotl` → `skills/` directory; Codex scans `~/.agents/skills/` |
+| Cline | Does not use `skills/` directly — uses `cline/rules/` equivalents instead |
+
+### Skill Index
+
+`skills/using-hotl/SKILL.md` is the session entry point. It is loaded via the Claude Code SessionStart hook (see [Layer 4 — Hooks](#layer-4--hooks)) and contains a table of all available skills with their intended trigger conditions. This gives the AI a map to the full skill set at the start of every session.
+
+---
+
+## Layer 2 — Commands (Claude Code)
+
+Files in `commands/` create Claude Code slash commands (`/hotl:<name>`). Each command file is a short Markdown document that typically delegates to a skill.
+
+```
+commands/brainstorm.md  →  /hotl:brainstorm  →  invokes hotl:brainstorming
+commands/loop.md        →  /hotl:loop        →  invokes hotl:loop-execution
+```
+
+Commands are registered alongside skills in `.claude-plugin/plugin.json`:
+
+```json
+{
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json"
+}
+```
+
+Commands exist as a convenience layer. Users who prefer slash commands get autocomplete and explicit invocation. The underlying skill file is the authoritative source of behavior.
+
+---
+
+## Layer 3 — Cline Rules
+
+Cline does not use the skill discovery mechanism that Claude Code and Codex use. Instead, it reads global rule files from `~/Documents/Cline/Rules/`. HOTL ships a parallel set of rule files in `cline/rules/` that encode the same behavior as the skills:
+
+```
+skills/brainstorming/SKILL.md   ←→   cline/rules/hotl-brainstorming.md
+skills/writing-plans/SKILL.md   ←→   cline/rules/hotl-planning.md
+skills/loop-execution/SKILL.md  ←→   cline/rules/hotl-execution.md
+...
+```
+
+`install-cline.sh` copies these files to `~/Documents/Cline/Rules/`. Because Cline applies global rules to every session automatically, there are no slash commands or explicit invocations — the rules are always active.
+
+---
+
+## Layer 4 — Hooks (Claude Code)
+
+`hooks/hooks.json` registers a `session-start` hook with Claude Code:
+
+```json
+{
+  "hooks": {
+    "session-start": "./run-hook.cmd"
+  }
+}
+```
+
+When a Claude Code session opens, this hook runs `run-hook.cmd`, which loads `hotl:using-hotl`. That skill establishes the full skill index and HOTL operating principles before any user message is processed. This ensures the AI enters every session knowing what HOTL skills are available and how to route requests.
+
+---
+
+## Layer 5 — Adapter Templates
+
+Files in `adapters/` are templates that users copy into their own projects via the `hotl:setup-project` skill or `/hotl:setup` command. They are not active in the HOTL repository itself.
+
+| Template | Purpose |
+|---|---|
+| `AGENTS.md.template` | Project-level governance document for Codex agents |
+| `.clinerules.template` | Project-level Cline rules (supplements global rules) |
+| `cursor-rules.template` | Cursor IDE rules for a specific project |
+| `copilot-instructions.template` | GitHub Copilot instructions for a specific project |
+
+Adapter templates give teams a project-local layer of HOTL governance that can be customized per repository.
+
+---
+
+## Layer 6 — Workflow Files
+
+`hotl-workflow-<slug>.md` files are **not** part of the HOTL repository. They are generated by the `hotl:writing-plans` skill inside the user's project during planning. HOTL ships:
+
+- **`workflows/`** — Reusable workflow templates (feature, bugfix, refactor) that `writing-plans` uses as starting points
+- **`docs/workflow-format.md`** — The complete specification for the format
+- **`scripts/document-lint.sh`** — The deterministic structural linter that validates generated files
+
+The workflow file is the contract between planning and execution. Its format is the main integration surface: anything that reads or writes workflow files (skills, lint script, tests) must agree on it.
+
+---
+
+## Data Flow: Request to Execution
+
+```
+User request
+    │
+    ▼
+using-hotl (session index)
+    │
+    ├─ brainstorming  →  HOTL contracts (intent, verification, governance)
+    │
+    ├─ writing-plans  →  hotl-workflow-<slug>.md  (generated in user project)
+    │
+    ├─ document-review
+    │     ├─ document-lint.sh (deterministic structural check)
+    │     └─ AI qualitative review (PASS / REVISE / HUMAN_OVERRIDE_REQUIRED)
+    │
+    ├─ [git branch preflight]  →  isolated branch or worktree
+    │
+    ├─ execution skill (choose one):
+    │     ├─ loop-execution       (autonomous, loops until criteria met)
+    │     ├─ executing-plans      (linear, human checkpoints)
+    │     └─ subagent-execution   (delegated to fresh subagents)
+    │
+    └─ verification-before-completion  →  evidence before done
+```
+
+---
+
+## Installation Paths
+
+### Claude Code (marketplace)
+
+```
+marketplace install  →  .claude-plugin/plugin.json loaded by Claude Code
+                    →  skills/, commands/, hooks/ registered automatically
+```
+
+### Claude Code (manual)
+
+```
+install.sh  →  copies plugin to Claude Code plugin directory
+            →  same registration as marketplace
+```
+
+### Codex
+
+```
+git clone → ~/.codex/hotl
+symlink   → ~/.agents/skills/hotl → ~/.codex/hotl/skills/
+Codex scans ~/.agents/skills/ on startup → discovers all skills
+```
+
+### Cline
+
+```
+install-cline.sh  →  copies cline/rules/*.md → ~/Documents/Cline/Rules/
+                  →  Cline applies all rules in that directory automatically
+```
+
+### Cursor / Copilot
+
+```
+hotl:setup-project (inside user project)
+    →  generates adapters/cursor-rules.template → .cursorrules
+    →  generates adapters/copilot-instructions.template → .github/copilot-instructions.md
+```
+
+---
+
+## Testing
+
+HOTL uses [BATS](https://github.com/bats-core/bats-core) for smoke testing:
+
+```bash
+bats test/smoke.bats
+```
+
+Tests validate:
+- All expected skill files are present and have valid frontmatter
+- Workflow file parsing (frontmatter extraction, step detection)
+- Branch name derivation from workflow filenames
+- Document-lint script structural checks
+
+The test suite runs in CI on every pull request.
+
+---
+
+## Key Invariants
+
+These constraints hold across the entire system. Changes that break them require updating all affected layers:
+
+1. **Skill names must match across layers** — the name in `SKILL.md` frontmatter, the `cline/rules/` filename, the `commands/` entry, and the `using-hotl` index must all agree.
+2. **Workflow file format is the integration surface** — `writing-plans`, all execution skills, `document-lint.sh`, and the test fixtures must all agree on the step format defined in `docs/workflow-format.md`.
+3. **`using-hotl` is the authoritative skill index** — every skill must appear there so the session hook gives the AI a complete map.
+4. **`auto_approve: true` + `risk_level: high` always requires human gates** — execution skills must not auto-approve high-risk steps regardless of frontmatter settings.

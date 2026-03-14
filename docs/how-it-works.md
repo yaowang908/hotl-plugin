@@ -1,6 +1,6 @@
 # How HOTL Works — In Detail
 
-This page expands on each phase of the HOTL workflow. For a quick overview, see the [main README](../README.md#the-hotl-workflow).
+This page expands on each phase of the HOTL workflow. For a quick overview, see the [main README](../README.md#the-hotl-workflow). For the technical architecture and repository structure, see [architecture.md](architecture.md).
 
 ---
 
